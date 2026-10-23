@@ -19,8 +19,10 @@
 #define DRIVER_LEFT_STBY_PIN   8  // D8, Left STBY
 
 #define DRIVER_RIGHT_PWM_PIN   6  // D6
-#define DRIVER_RIGHT_IN1_PIN   16 // A2, Right AIN1 and BIN1
-#define DRIVER_RIGHT_IN2_PIN   17 // A3, Right AIN2 and BIN2
+//#define DRIVER_RIGHT_IN1_PIN   16 // A2, Right AIN1 and BIN1
+//#define DRIVER_RIGHT_IN2_PIN   17 // A3, Right AIN2 and BIN2
+#define DRIVER_RIGHT_IN1_PIN   17 // A2, Right AIN1 and BIN1
+#define DRIVER_RIGHT_IN2_PIN   16 // A3, Right AIN2 and BIN2
 #define DRIVER_RIGHT_STBY_PIN  7  // D7, Right STBY
 
 // === Config end =========================================
@@ -132,67 +134,52 @@ void process_psx_analog()
   }
 }
 
-void driver_move(driver_config_t *config, bool ccw, byte level)
+void driver_move(driver_config_t *config, int speed)
 {
-  if (ccw) {
-    digitalWrite(config->in1_pin, LOW);
-    digitalWrite(config->in2_pin, HIGH);
-  } else {
+  if (speed > 0) {
     digitalWrite(config->in1_pin, HIGH);
     digitalWrite(config->in2_pin, LOW);
+    analogWrite(config->pwm_pin, speed);
+    digitalWrite(config->stby_pin, HIGH);
+  } else if (speed < 0) {
+    digitalWrite(config->in1_pin, LOW);
+    digitalWrite(config->in2_pin, HIGH);
+    analogWrite(config->pwm_pin, abs(speed));
+    digitalWrite(config->stby_pin, HIGH);
+  } else {
+    digitalWrite(config->stby_pin, LOW);
   }
-
-  analogWrite(config->pwm_pin, level);
 }
 
 void adjust_driver()
 {
-  static uint8_t old_level_x = 0;
-  static uint8_t old_level_y = 0;
-  uint8_t level_x = 0;
-  uint8_t level_y = 0;
-  bool ccw_x = false;
-  bool ccw_y = false;
+  // Переводим в диапозон [-255; 255]
+  int x = map(psx_state.analog_left.x, 0, 255, -255, 255);
+  int y = map(psx_state.analog_left.y, 0, 255, -255, 255);
 
-  level_x = abs(psx_state.analog_left.x - PS2X_ANALOG_X_ZERO); 
-  if (level_x > 127) level_x = 127;
-  level_x = level_x << 1;
-  level_y = abs(psx_state.analog_left.y - PS2X_ANALOG_Y_ZERO);
-  if (level_y > 127) level_y = 127;
-  level_y = level_y << 1;
+  // Зона нечувствительности (люфт стика в центре)
+  if (abs(x) < 15) x = 0;
+  if (abs(y) < 15) y = 0;
 
-  if (psx_state.analog_left.x == PS2X_ANALOG_X_ZERO) {
-    digitalWrite(driver_config_left.stby_pin, LOW);
-  } else {
-    digitalWrite(driver_config_left.stby_pin, HIGH);
-    ccw_x = psx_state.analog_left.x < PS2X_ANALOG_X_ZERO ? true: false;
+  // Алгоритм микширования для дифференциального шасси
+  int leftSpeed = y + x;
+  int rightSpeed = y - x;
+  static int leftSpeedOld, rightSpeedOld = 0;
+
+  // Ограничиваем скорость в пределах ШИМ (-255 ... 255)
+  leftSpeed = constrain(leftSpeed, -255, 255);
+  rightSpeed = constrain(rightSpeed, -255, 255);
+
+  if ((leftSpeed != leftSpeedOld) || (rightSpeed != rightSpeedOld)) 
+  {
+    Serial.print (F("Left "));
+    Serial.print (leftSpeed);
+    Serial.print (F(" Right "));
+    Serial.println (rightSpeed);
   }
 
-  if (psx_state.analog_left.y == PS2X_ANALOG_Y_ZERO) {
-    digitalWrite(driver_config_right.stby_pin, LOW);
-  } else {
-    digitalWrite(driver_config_right.stby_pin, HIGH);
-    ccw_y = psx_state.analog_left.y < PS2X_ANALOG_Y_ZERO ? true: false;
-  }
-
-  if ((old_level_x != psx_state.analog_left.x) || (old_level_y != psx_state.analog_left.y)) {
-    Serial.print (F("X "));
-    Serial.print (F("level = "));
-    Serial.print (level_x);
-    Serial.print (F(" ccw = "));
-    Serial.println  ( ccw_x);
-    Serial.print (F("Y "));
-    Serial.print (F("level = "));
-    Serial.print (level_y);
-    Serial.print (F(" ccw = "));
-    Serial.println  ( ccw_y);
-
-    old_level_x = psx_state.analog_left.x;
-    old_level_y = psx_state.analog_left.y;
-  }
-
-  driver_move(&driver_config_left, ccw_x, level_x);
-  driver_move(&driver_config_right, ccw_y, level_y);
+  driver_move(&driver_config_left, leftSpeed);
+  driver_move(&driver_config_right, rightSpeed);
 }
 
 void setup() 
